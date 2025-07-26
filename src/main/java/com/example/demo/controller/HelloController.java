@@ -7,11 +7,16 @@ import org.springframework.web.bind.annotation.RestController;
 public class HelloController {
     @GetMapping("/hello")
     public String sayHello() {
-        return "Hello from Spring Boot - STAGING Environment!";
+        return "Hello from Spring Boot - DEV Environment!";
+    }
+
+    @GetMapping("/dev")
+    public String getDevInfo() {
+        return "Development server active! Version 0.1-SNAPSHOT";
     }
 
     @GetMapping("/status")
     public String getStatus() {
-        return "Staging server is running! Version 1.1";
+        return "Dev server is running! Version 0.1-SNAPSHOT";
     }
 }

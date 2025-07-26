@@ -3,9 +3,14 @@ name: Chain Deployment Pipeline
 on:
   push:
     branches:
-      - staging
+      - dev
   workflow_dispatch:
     inputs:
+      promote_to_staging:
+        description: 'Promote to staging'
+        required: true
+        default: 'false'
+        type: boolean
       promote_to_prod:
         description: 'Promote to production'
         required: true
@@ -37,9 +42,81 @@ jobs:
     - name: Push Image
       run: docker push ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
 
-  deploy-staging:
+  deploy-dev:
     needs: build
     runs-on: ubuntu-latest
+    steps:
+    - name: Deploy to Dev
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ec2-user
+        key: ${{ secrets.EC2_PRIVATE_KEY }}
+        script: |
+          docker pull ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
+          docker stop springboot-app || true
+          docker rm springboot-app || true
+          docker run -d -p 8484:8484 --name springboot-app ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
+
+  test-dev:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    steps:
+    - name: Wait for deployment
+      run: sleep 30
+
+    - name: Test Dev Health
+      run: |
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.EC2_HOST }}:8484/hello)
+        if [ $response -eq 200 ]; then
+          echo "✅ Dev health check passed"
+        else
+          echo "❌ Dev health check failed"
+          exit 1
+        fi
+
+  promote-to-staging:
+    needs: test-dev
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/dev'
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+
+    - name: Create Staging Branch and PR
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Create staging branch from current dev
+        git checkout -b staging-promotion-${{ github.sha }}
+        git push origin staging-promotion-${{ github.sha }}
+        
+        # Create PR to staging
+        gh pr create --base staging --head staging-promotion-${{ github.sha }} \
+          --title "🚀 Auto-promote dev to staging" \
+          --body "## Dev → Staging Promotion
+          
+          ✅ Dev tests passed
+          ✅ Health checks successful
+          
+          **Changes:**
+          - SHA: ${{ github.sha }}
+          - Branch: dev
+          - Tested on: ${{ secrets.EC2_HOST }}:8484
+          
+          **Ready for staging deployment**" \
+          --label "auto-promotion,staging-ready"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy-staging:
+    needs: test-dev
+    runs-on: ubuntu-latest
+    if: github.event.inputs.promote_to_staging == 'true' || (github.ref == 'refs/heads/staging' && github.event_name == 'push')
     steps:
     - name: Deploy to Staging
       uses: appleboy/ssh-action@v1.0.0
@@ -56,6 +133,7 @@ jobs:
   test-staging:
     needs: deploy-staging
     runs-on: ubuntu-latest
+    if: github.event.inputs.promote_to_staging == 'true' || (github.ref == 'refs/heads/staging' && github.event_name == 'push')
     steps:
     - name: Wait for deployment
       run: sleep 30
@@ -80,7 +158,7 @@ jobs:
           exit 1
         fi
 
-  auto-promote:
+  promote-to-production:
     needs: test-staging
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/staging'
@@ -91,16 +169,21 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0
 
-    - name: Create Pull Request to Main
-      uses: peter-evans/create-pull-request@v5
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        branch: auto-promote-${{ github.sha }}
-        base: main
-        title: "🚀 Auto-promote staging to production"
-        body: |
-          ## Automated Promotion
+    - name: Create Production Branch and PR
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Create production branch from current staging
+        git checkout -b production-promotion-${{ github.sha }}
+        git push origin production-promotion-${{ github.sha }}
+        
+        # Create PR to main (production)
+        gh pr create --base main --head production-promotion-${{ github.sha }} \
+          --title "🚀 Auto-promote staging to production" \
+          --body "## Staging → Production Promotion
           
+          ✅ Dev tests passed
           ✅ Staging tests passed
           ✅ Health checks successful
           
@@ -109,20 +192,20 @@ jobs:
           - Branch: staging
           - Tested on: ${{ secrets.EC2_HOST_STAGING }}:8484
           
-          **Ready for production deployment**
-        labels: |
-          auto-promotion
-          production-ready
+          **Ready for production deployment**" \
+          --label "auto-promotion,production-ready"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   deploy-production:
-    needs: test-staging
+    needs: promote-to-production
     runs-on: ubuntu-latest
-    if: github.event.inputs.promote_to_prod == 'true' || (github.ref == 'refs/heads/main' && github.event_name == 'push')
+    if: github.event.inputs.promote_to_prod == 'true'
     steps:
     - name: Deploy to Production
       uses: appleboy/ssh-action@v1.0.0
       with:
-        host: ${{ secrets.EC2_HOST }}
+        host: ${{ secrets.EC2_HOST_PROD }}
         username: ec2-user
         key: ${{ secrets.EC2_PRIVATE_KEY }}
         script: |
@@ -132,14 +215,27 @@ jobs:
           docker run -d -p 8484:8484 --name springboot-app ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
 
   notify-success:
-    needs: [deploy-staging, test-staging, auto-promote]
+    needs: [deploy-dev, test-dev, promote-to-staging]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && github.ref == 'refs/heads/dev'
     steps:
-    - name: Deployment Summary
+    - name: Dev Deployment Summary
       run: |
-        echo "🎉 Chain Deployment Summary"
-        echo "=========================="
+        echo "🎉 Dev Deployment Summary"
+        echo "========================"
+        echo "✅ Dev: http://${{ secrets.EC2_HOST }}:8484"
+        echo "📝 Staging promotion PR created"
+        echo "⏳ Awaiting staging approval"
+
+  notify-staging-success:
+    needs: [deploy-staging, test-staging, promote-to-production]
+    runs-on: ubuntu-latest
+    if: always() && github.ref == 'refs/heads/staging'
+    steps:
+    - name: Staging Deployment Summary
+      run: |
+        echo "🎉 Staging Deployment Summary"
+        echo "============================"
         echo "✅ Staging: http://${{ secrets.EC2_HOST_STAGING }}:8484"
-        echo "📝 Auto-promotion PR created"
+        echo "📝 Production promotion PR created"
         echo "⏳ Awaiting production approval"

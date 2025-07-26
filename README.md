@@ -40,9 +40,30 @@ docker run -p 8484:8484 springboot-app
 
 ## 🌐 API Endpoints
 
-- `GET /hello` - Returns greeting message
-- `GET /status` - Returns server status (staging only)
+- `GET /hello` - Returns greeting message (all environments)
+- `GET /dev` - Returns dev info (dev only)
+- `GET /status` - Returns server status (dev & staging)
+- `GET /health` - Returns server health status (production)
 - Application runs on port 8484
+
+## 🚀 Deployment Flow
+
+**Dev → Staging → Production**
+
+1. **Dev Environment**: Push to `dev` branch
+   - Auto-deploys to dev server
+   - Runs health checks
+   - Creates PR to staging
+
+2. **Staging Environment**: Merge PR to `staging` branch
+   - Auto-deploys to staging server
+   - Runs comprehensive tests
+   - Creates PR to production
+
+3. **Production Environment**: Merge PR to `main` branch
+   - Auto-deploys to production server
+   - Final health checks
+   - Production ready
 
 ## 🔧 Deployment
 
