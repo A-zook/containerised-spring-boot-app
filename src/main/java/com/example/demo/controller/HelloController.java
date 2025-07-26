@@ -9,4 +9,9 @@ public class HelloController {
     public String sayHello() {
         return "Hello from Spring Boot - STAGING Environment!";
     }
+
+    @GetMapping("/status")
+    public String getStatus() {
+        return "Staging server is running! Version 1.1";
+    }
 }
