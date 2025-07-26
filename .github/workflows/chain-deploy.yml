@@ -86,19 +86,15 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0
 
-    - name: Create Staging Branch and PR
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Create staging branch from current dev
-        git checkout -b staging-promotion-${{ github.sha }}
-        git push origin staging-promotion-${{ github.sha }}
-        
-        # Create PR to staging
-        gh pr create --base staging --head staging-promotion-${{ github.sha }} \
-          --title "🚀 Auto-promote dev to staging" \
-          --body "## Dev → Staging Promotion
+    - name: Create Pull Request to Staging
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: dev-to-staging-${{ github.sha }}
+        base: staging
+        title: "🚀 Auto-promote dev to staging"
+        body: |
+          ## Dev → Staging Promotion
           
           ✅ Dev tests passed
           ✅ Health checks successful
@@ -108,10 +104,10 @@ jobs:
           - Branch: dev
           - Tested on: ${{ secrets.EC2_HOST }}:8484
           
-          **Ready for staging deployment**" \
-          --label "auto-promotion,staging-ready"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          **Ready for staging deployment**
+        labels: |
+          auto-promotion
+          staging-ready
 
   deploy-staging:
     needs: test-dev
@@ -169,19 +165,15 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0
 
-    - name: Create Production Branch and PR
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Create production branch from current staging
-        git checkout -b production-promotion-${{ github.sha }}
-        git push origin production-promotion-${{ github.sha }}
-        
-        # Create PR to main (production)
-        gh pr create --base main --head production-promotion-${{ github.sha }} \
-          --title "🚀 Auto-promote staging to production" \
-          --body "## Staging → Production Promotion
+    - name: Create Pull Request to Production
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: staging-to-prod-${{ github.sha }}
+        base: main
+        title: "🚀 Auto-promote staging to production"
+        body: |
+          ## Staging → Production Promotion
           
           ✅ Dev tests passed
           ✅ Staging tests passed
@@ -192,10 +184,10 @@ jobs:
           - Branch: staging
           - Tested on: ${{ secrets.EC2_HOST_STAGING }}:8484
           
-          **Ready for production deployment**" \
-          --label "auto-promotion,production-ready"
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          **Ready for production deployment**
+        labels: |
+          auto-promotion
+          production-ready
 
   deploy-production:
     needs: promote-to-production
