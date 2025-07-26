@@ -41,6 +41,8 @@ docker run -p 8484:8484 springboot-app
 ## 🌐 API Endpoints
 
 - `GET /hello` - Returns greeting message
+- `GET /health` - Returns server health status (production)
+- `GET /status` - Returns server status (staging only)
 - Application runs on port 8484
 
 ## 🔧 Deployment
