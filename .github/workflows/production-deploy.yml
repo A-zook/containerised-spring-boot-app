@@ -1,0 +1,56 @@
+name: Production Deployment
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+    labels:
+      - auto-promotion
+
+jobs:
+  deploy-production:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Get Docker Image Tag
+      id: get-tag
+      run: |
+        # Extract SHA from PR branch name
+        BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+        SHA=$(echo $BRANCH_NAME | sed 's/auto-promote-//')
+        echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+    - name: Deploy to Production
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ec2-user
+        key: ${{ secrets.EC2_PRIVATE_KEY }}
+        script: |
+          docker pull ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ steps.get-tag.outputs.sha }}
+          docker stop springboot-app || true
+          docker rm springboot-app || true
+          docker run -d -p 8484:8484 --name springboot-app ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ steps.get-tag.outputs.sha }}
+
+    - name: Test Production Health
+      run: |
+        sleep 30
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.EC2_HOST }}:8484/hello)
+        if [ $response -eq 200 ]; then
+          echo "✅ Production deployment successful"
+        else
+          echo "❌ Production deployment failed"
+          exit 1
+        fi
+
+    - name: Deployment Success Notification
+      run: |
+        echo "🚀 Production Deployment Complete!"
+        echo "=================================="
+        echo "✅ Production: http://${{ secrets.EC2_HOST }}:8484"
+        echo "✅ Health check passed"
+        echo "🎯 Chain deployment successful!"

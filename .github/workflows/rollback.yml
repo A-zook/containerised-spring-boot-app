@@ -1,0 +1,73 @@
+name: Emergency Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+      previous_sha:
+        description: 'Previous working SHA (optional)'
+        required: false
+        type: string
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set Environment Variables
+      run: |
+        if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+          echo "HOST=${{ secrets.EC2_HOST }}" >> $GITHUB_ENV
+          echo "ENV_NAME=Production" >> $GITHUB_ENV
+        else
+          echo "HOST=${{ secrets.EC2_HOST_STAGING }}" >> $GITHUB_ENV
+          echo "ENV_NAME=Staging" >> $GITHUB_ENV
+        fi
+
+    - name: Get Previous Image
+      id: get-image
+      run: |
+        if [ -n "${{ github.event.inputs.previous_sha }}" ]; then
+          echo "image=${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.event.inputs.previous_sha }}" >> $GITHUB_OUTPUT
+        else
+          echo "image=${{ secrets.DOCKER_USERNAME }}/springboot-app:latest" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Rollback Deployment
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ env.HOST }}
+        username: ec2-user
+        key: ${{ secrets.EC2_PRIVATE_KEY }}
+        script: |
+          echo "🔄 Rolling back ${{ env.ENV_NAME }} environment..."
+          docker pull ${{ steps.get-image.outputs.image }}
+          docker stop springboot-app || true
+          docker rm springboot-app || true
+          docker run -d -p 8484:8484 --name springboot-app ${{ steps.get-image.outputs.image }}
+
+    - name: Verify Rollback
+      run: |
+        sleep 30
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ env.HOST }}:8484/hello)
+        if [ $response -eq 200 ]; then
+          echo "✅ ${{ env.ENV_NAME }} rollback successful"
+        else
+          echo "❌ ${{ env.ENV_NAME }} rollback failed"
+          exit 1
+        fi
+
+    - name: Rollback Summary
+      run: |
+        echo "🔄 Rollback Complete!"
+        echo "===================="
+        echo "Environment: ${{ env.ENV_NAME }}"
+        echo "Host: http://${{ env.HOST }}:8484"
+        echo "Image: ${{ steps.get-image.outputs.image }}"
+        echo "✅ Service restored"
