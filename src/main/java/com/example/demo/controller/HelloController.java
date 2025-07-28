@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class HelloController {
     @GetMapping("/hello")
     public String sayHello() {
-        return "Hello from Spring Boot - PRODUCTION Environment!";
+        return "Hello Peter from Spring Boot - PRODUCTION Environment!";
     }
 
     @GetMapping("/health")
