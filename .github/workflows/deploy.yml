@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - staging
 
 jobs:
   build:
@@ -32,7 +31,7 @@ jobs:
       run: docker push ${{ secrets.DOCKER_USERNAME }}/springboot-app
 
   deploy:
-    if: false # Disabled - EC2 instances destroyed
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -48,19 +47,4 @@ jobs:
           docker rm springboot-app || true
           docker run -d -p 8484:8484 --name springboot-app ${{ secrets.DOCKER_USERNAME }}/springboot-app
 
-  deploy-staging:
-    if: false # Disabled - EC2 instances destroyed
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-    - name: SSH into Staging EC2 and Deploy
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.EC2_HOST_STAGING }}
-        username: ec2-user
-        key: ${{ secrets.EC2_PRIVATE_KEY }}
-        script: |
-          docker pull ${{ secrets.DOCKER_USERNAME }}/springboot-app
-          docker stop springboot-app || true
-          docker rm springboot-app || true
-          docker run -d -p 8484:8484 --name springboot-app ${{ secrets.DOCKER_USERNAME }}/springboot-app
+  # deploy-staging: Removed - staging resources destroyed

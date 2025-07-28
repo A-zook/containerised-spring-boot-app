@@ -1,0 +1,26 @@
+name: Test Build Only
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up JDK
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Build JAR with Maven
+      run: mvn clean install
+
+    - name: Build Docker Image (Local Only)
+      run: docker build -t springboot-app-test .
+
+    - name: Test Complete
+      run: echo "✅ Build successful without secrets!"
