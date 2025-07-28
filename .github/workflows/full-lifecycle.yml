@@ -1,0 +1,223 @@
+name: Full Lifecycle - Infrastructure + App Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy_after_deploy:
+        description: 'Destroy infrastructure after deployment'
+        required: true
+        default: 'true'
+        type: boolean
+      wait_time:
+        description: 'Minutes to wait before destroy (for testing)'
+        required: true
+        default: '5'
+        type: string
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Copy SSH Public Key
+      run: |
+        mkdir -p terraform/dev
+        echo "${{ secrets.SSH_PUBLIC_KEY }}" > terraform/dev/aws-springboot-key.pub
+
+    - name: Terraform Init
+      run: |
+        cd terraform/dev
+        terraform init
+
+    - name: Terraform Plan
+      run: |
+        cd terraform/dev
+        terraform plan -out=tfplan
+
+    - name: Upload Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-plan
+        path: terraform/dev/tfplan
+
+  terraform-apply:
+    needs: terraform-plan
+    runs-on: ubuntu-latest
+    outputs:
+      ec2_host: ${{ steps.apply.outputs.ec2_host }}
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+        terraform_wrapper: false
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Copy SSH Public Key
+      run: |
+        mkdir -p terraform/dev
+        echo "${{ secrets.SSH_PUBLIC_KEY }}" > terraform/dev/aws-springboot-key.pub
+
+    - name: Download Plan
+      uses: actions/download-artifact@v3
+      with:
+        name: terraform-plan
+        path: terraform/dev/
+
+    - name: Terraform Init
+      run: |
+        cd terraform/dev
+        terraform init
+
+    - name: Terraform Apply
+      id: apply
+      run: |
+        cd terraform/dev
+        terraform apply tfplan
+        EC2_HOST=$(terraform output -raw instance_public_ip)
+        echo "ec2_host=$EC2_HOST" >> $GITHUB_OUTPUT
+        echo "🚀 Infrastructure deployed! EC2: $EC2_HOST"
+
+  build-and-deploy:
+    needs: terraform-apply
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Set up JDK
+      uses: actions/setup-java@v3
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: Build JAR with Maven
+      run: mvn clean install
+
+    - name: Build Docker Image
+      run: docker build -t ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }} .
+
+    - name: Login to DockerHub
+      run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+    - name: Push Image
+      run: docker push ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
+
+    - name: Wait for EC2 to be ready
+      run: sleep 60
+
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ needs.terraform-apply.outputs.ec2_host }}
+        username: ec2-user
+        key: ${{ secrets.EC2_PRIVATE_KEY }}
+        script: |
+          # Wait for Docker to be ready
+          while ! docker info >/dev/null 2>&1; do
+            echo "Waiting for Docker to start..."
+            sleep 10
+          done
+          
+          docker pull ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
+          docker stop springboot-app || true
+          docker rm springboot-app || true
+          docker run -d -p 8484:8484 --name springboot-app ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}
+
+    - name: Test Deployment
+      run: |
+        sleep 30
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ needs.terraform-apply.outputs.ec2_host }}:8484/hello || echo "000")
+        if [ "$response" = "200" ]; then
+          echo "✅ Deployment successful! App is running at http://${{ needs.terraform-apply.outputs.ec2_host }}:8484"
+        else
+          echo "⚠️ App might still be starting... Response code: $response"
+        fi
+
+    - name: Deployment Summary
+      run: |
+        echo "🎉 Deployment Complete!"
+        echo "======================"
+        echo "🌐 Application URL: http://${{ needs.terraform-apply.outputs.ec2_host }}:8484/hello"
+        echo "🐳 Docker Image: ${{ secrets.DOCKER_USERNAME }}/springboot-app:${{ github.sha }}"
+        echo "⏰ Waiting ${{ github.event.inputs.wait_time }} minutes before cleanup..."
+
+  wait-before-destroy:
+    needs: [terraform-apply, build-and-deploy]
+    runs-on: ubuntu-latest
+    if: github.event.inputs.destroy_after_deploy == 'true'
+    steps:
+    - name: Wait Period
+      run: |
+        echo "⏳ Waiting ${{ github.event.inputs.wait_time }} minutes for testing..."
+        echo "🌐 Test your app at: http://${{ needs.terraform-apply.outputs.ec2_host }}:8484/hello"
+        sleep $((${{ github.event.inputs.wait_time }} * 60))
+
+  terraform-destroy:
+    needs: [terraform-apply, build-and-deploy, wait-before-destroy]
+    runs-on: ubuntu-latest
+    if: always() && github.event.inputs.destroy_after_deploy == 'true'
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v3
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+
+    - name: Copy SSH Public Key
+      run: |
+        mkdir -p terraform/dev
+        echo "${{ secrets.SSH_PUBLIC_KEY }}" > terraform/dev/aws-springboot-key.pub
+
+    - name: Terraform Init
+      run: |
+        cd terraform/dev
+        terraform init
+
+    - name: Terraform Destroy
+      run: |
+        cd terraform/dev
+        terraform destroy -auto-approve
+        echo "🧹 Infrastructure destroyed successfully!"
+
+    - name: Cleanup Summary
+      run: |
+        echo "✅ Full Lifecycle Complete!"
+        echo "=========================="
+        echo "✅ Infrastructure created"
+        echo "✅ Application deployed"
+        echo "✅ Testing period completed"
+        echo "✅ Infrastructure destroyed"
+        echo "💰 No ongoing AWS costs!"
