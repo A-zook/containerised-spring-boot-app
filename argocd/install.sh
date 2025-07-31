@@ -25,6 +25,10 @@ echo ""
 echo "Run this command to access ArgoCD:"
 echo "kubectl port-forward svc/argocd-server -n argocd 8080:443"
 
-# Apply the application
-echo "📦 Applying ArgoCD application..."
+# Apply the applications
+echo "📦 Applying ArgoCD applications..."
 kubectl apply -f argocd/application.yaml
+kubectl apply -f argocd/monitoring-app.yaml
+
+echo "📊 Monitoring applications deployed via ArgoCD!"
+echo "Check ArgoCD UI for Prometheus and Grafana deployment status"

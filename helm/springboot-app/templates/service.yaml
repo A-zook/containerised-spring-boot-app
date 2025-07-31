@@ -4,6 +4,10 @@ metadata:
   name: {{ include "springboot-app.fullname" . }}
   labels:
     {{- include "springboot-app.labels" . | nindent 4 }}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/actuator/prometheus"
+    prometheus.io/port: "{{ .Values.service.targetPort }}"
 spec:
   type: {{ .Values.service.type }}
   ports:
