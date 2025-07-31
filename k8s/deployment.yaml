@@ -17,6 +17,7 @@ spec:
       containers:
       - name: springboot-app
         image: azook/springboot-app:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8484
         env:
